@@ -56,29 +56,11 @@ class UserManager:
         except Exception:
             return False
 
-    def register(self, username: str, password: str, name: str, email: str):
-        if username in self.users:
-            return False, "Username already exists"
-        if len(password) < 8:
-            return False, "Password must be at least 8 characters"
-        row = {
-            'username': username,
-            'password_hash': self.hash_pw(password),
-            'name': name,
-            'email': email,
-            'plan': 'trial',
-            'expires': (datetime.utcnow() + timedelta(days=7)).date().isoformat(),
-            'created': datetime.utcnow().isoformat()
-        }
-        try:
-            self.client.table('users').insert(row).execute()
-            self.users[username] = row
-            return True, "Account created successfully"
-        except Exception as e:
-            return False, f"Error saving user: {e}"
-
+    # Restrict to admin only
     def authenticate(self, username: str, password: str):
-        u = self.users.get(username)
+        if username != 'admin':
+            return False, "Only the admin account is allowed."
+        u = self.users.get('admin')
         if not u or not self.verify_pw(password, u.get('password_hash', '')):
             return False, "Invalid username or password"
         # Update login stats
@@ -87,11 +69,35 @@ class UserManager:
             self.client.table('users').update({
                 'last_login': datetime.utcnow().isoformat(),
                 'login_count': new_count
-            }).eq('username', username).execute()
+            }).eq('username', 'admin').execute()
             u['login_count'] = new_count
         except Exception:
             pass
         return True, u
+
+    def change_admin_password(self, current_pw: str, new_pw: str):
+        u = self.users.get('admin')
+        if not u:
+            return False, "Admin not found."
+        if not self.verify_pw(current_pw, u.get('password_hash', '')):
+            return False, "Current password is incorrect."
+        try:
+            new_hash = self.hash_pw(new_pw)
+            self.client.table('users').update({
+                'password_hash': new_hash
+            }).eq('username', 'admin').execute()
+            # update local cache
+            self.users['admin']['password_hash'] = new_hash
+            return True, "Password updated successfully."
+        except Exception as e:
+            return False, f"Error updating password: {e}"
+
+    def admin_using_default_password(self) -> bool:
+        u = self.users.get('admin')
+        if not u:
+            return False
+        # Verifica se a senha atual ainda é a padrão
+        return self.verify_pw("ChangeThis123!", u.get('password_hash', ''))
 
 user_manager = UserManager(supabase)
 
@@ -99,49 +105,26 @@ user_manager = UserManager(supabase)
 if "user" not in st.session_state:
     st.session_state.user = None
 
-# ============ Auth UI ============
+# ============ Auth UI (somente admin, sem registro) ============
 def render_auth_ui():
-    st.title("🔐 Financials — Sign in")
-    tab_login, tab_register = st.tabs(["Login", "Register"])
-
-    with tab_login:
-        with st.form("login_form"):
-            username = st.text_input("Username")
-            password = st.text_input("Password", type="password")
-            ok = st.form_submit_button("Sign in", type="primary", use_container_width=True)
-            if ok:
-                success, res = user_manager.authenticate(username, password)
-                if success:
-                    st.session_state.user = {
-                        "username": res['username'],
-                        "name": res['name'],
-                        "plan": res.get('plan', 'trial'),
-                        "expires": res.get('expires', '')
-                    }
-                    st.success("Logged in")
-                    st.rerun()
-                else:
-                    st.error(res)
-
-    with tab_register:
-        with st.form("register_form"):
-            col1, col2 = st.columns(2)
-            with col1:
-                name = st.text_input("Full name*")
-                username = st.text_input("Username* (3–20 chars)")
-            with col2:
-                email = st.text_input("Email*")
-                password = st.text_input("Password* (min 8)", type="password")
-            ok = st.form_submit_button("Create account", use_container_width=True)
-            if ok:
-                if not all([name, username, email, password]):
-                    st.error("Please fill all required fields.")
-                else:
-                    success, msg = user_manager.register(username, password, name, email)
-                    if success:
-                        st.success(msg + ". You can now sign in.")
-                    else:
-                        st.error(msg)
+    st.title("🔐 Financials — Admin")
+    with st.form("login_form"):
+        username = st.text_input("Username", value="admin")
+        password = st.text_input("Password", type="password")
+        ok = st.form_submit_button("Sign in", type="primary", use_container_width=True)
+        if ok:
+            success, res = user_manager.authenticate(username, password)
+            if success:
+                st.session_state.user = {
+                    "username": res['username'],
+                    "name": res.get('name', 'Admin'),
+                    "plan": res.get('plan', 'admin'),
+                    "expires": res.get('expires', '')
+                }
+                st.success("Logged in")
+                st.rerun()
+            else:
+                st.error(res)
 
 def require_login():
     if st.session_state.user is None:
@@ -150,7 +133,9 @@ def require_login():
 
 def user_header():
     u = st.session_state.user
-    st.caption(f"Hello, {u['name']} — plan: {u.get('plan','trial')}")
+    st.caption(f"Hello, {u['name']} — plan: {u.get('plan','admin')}")
+    if user_manager.admin_using_default_password():
+        st.warning("Você está usando a senha padrão do admin. Altere em Settings.")
     if st.button("Sign out", use_container_width=True):
         st.session_state.user = None
         st.rerun()
@@ -164,14 +149,14 @@ def brl(v):
 # ============ Protect before building sidebar ============
 require_login()
 
-# ============ Sidebar & Routing (single radio with unique key) ============
+# ============ Sidebar & Routing ============
 with st.sidebar:
     user_header()
     st.markdown("## Navigation")
     route = st.radio(
         "Go to:",
-        ["Dashboard","Cards","Transactions","Debts","Reports"],
-        key="nav_radio"  # unique key to avoid duplicate ID
+        ["Dashboard","Cards","Transactions","Debts","Reports","Settings"],
+        key="nav_radio"
     )
 
 # ============ Pages ============
@@ -232,11 +217,34 @@ def page_reports():
     st.info("Reports will appear here (demo).")
     st.download_button("⬇️ Export CSV (demo)", data="col1,col2\nval1,val2\n", file_name="demo.csv", mime="text/csv")
 
+def page_settings():
+    st.title("⚙️ Settings")
+    st.subheader("Change admin password")
+    with st.form("change_pw_form"):
+        current = st.text_input("Current password", type="password")
+        new = st.text_input("New password", type="password")
+        confirm = st.text_input("Confirm new password", type="password")
+        ok = st.form_submit_button("Update password", type="primary", use_container_width=False)
+        if ok:
+            if not current or not new or not confirm:
+                st.error("Please fill all fields.")
+            elif new != confirm:
+                st.error("New password and confirmation do not match.")
+            elif len(new) < 8:
+                st.error("Password must be at least 8 characters.")
+            else:
+                success, msg = user_manager.change_admin_password(current, new)
+                if success:
+                    st.success(msg)
+                else:
+                    st.error(msg)
+
 # ============ Render ============
 if route == "Dashboard": page_dashboard()
 elif route == "Cards": page_cards()
 elif route == "Transactions": page_transactions()
 elif route == "Debts": page_debts()
 elif route == "Reports": page_reports()
+elif route == "Settings": page_settings()
 else:
     page_dashboard()
