@@ -1,6 +1,6 @@
 import streamlit as st
 from supabase import create_client, Client
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import bcrypt
 
 st.set_page_config(page_title="Financials", page_icon="💼", layout="wide")
@@ -155,25 +155,26 @@ def user_header():
         st.session_state.user = None
         st.rerun()
 
-# ============ Sidebar & Routing ============
-with st.sidebar:
-    if st.session_state.user:
-        user_header()
-        st.markdown("## Navigation")
-        route = st.radio("Go to:", ["Dashboard","Cards","Transactions","Debts","Reports"])
-    else:
-        route = None
-
 def brl(v):
     try:
         return f"R$ {float(v):,.2f}".replace(",", "X").replace(".", ",").replace("X",".")
     except:
         return "R$ 0,00"
 
-with st.sidebar:
-    st.markdown("## Navigation")
-    route = st.radio("Go to:", ["Dashboard","Cards","Transactions","Debts","Reports"])
+# ============ Protect before building sidebar ============
+require_login()
 
+# ============ Sidebar & Routing (single radio with unique key) ============
+with st.sidebar:
+    user_header()
+    st.markdown("## Navigation")
+    route = st.radio(
+        "Go to:",
+        ["Dashboard","Cards","Transactions","Debts","Reports"],
+        key="nav_radio"  # unique key to avoid duplicate ID
+    )
+
+# ============ Pages ============
 def page_dashboard():
     st.title("📊 Dashboard")
     c1,c2,c3,c4 = st.columns(4)
@@ -231,9 +232,7 @@ def page_reports():
     st.info("Reports will appear here (demo).")
     st.download_button("⬇️ Export CSV (demo)", data="col1,col2\nval1,val2\n", file_name="demo.csv", mime="text/csv")
 
-# ============ Protect & Render ============
-require_login()
-
+# ============ Render ============
 if route == "Dashboard": page_dashboard()
 elif route == "Cards": page_cards()
 elif route == "Transactions": page_transactions()
