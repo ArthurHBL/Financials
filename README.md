@@ -7,4 +7,4 @@ pip install -r requirements.txt
 streamlit run app.py
 
 ## Deploy
-Use Streamlit Community Cloud → Main file: app.py
+Use Streamlit Community Cloud → Main file: app2.py
